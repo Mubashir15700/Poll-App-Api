@@ -5,6 +5,13 @@ import generateToken from "../utils/generateToken.js";
 import setCookie from "../utils/setCookie.js";
 import PollModal from "../models/poll.js";
 
+interface User {
+    userId: string;
+    username: string;
+    iat: number;
+    exp: number;
+}
+
 export const handleGoogleLoginCallback = async (req: Request, res: Response) => {
     passport.authenticate("google", async (err: Error | null, user: any, info: any) => {
         if (err) {
@@ -42,7 +49,7 @@ export const getCurrentUser = (req: Request, res: Response) => {
     res.status(200).send(user);
 };
 
-const getPolls = async (creatorId: string | null = null) => {
+const getPolls = async (creatorId: string | null = null, pollId: string | null = null) => {
     // Define the aggregation pipeline stages
     const pipeline: any[] = [
         {
@@ -115,7 +122,16 @@ const getPolls = async (creatorId: string | null = null) => {
     if (creatorId) {
         pipeline.unshift({
             $match: {
-                creator: new mongoose.Types.ObjectId(creatorId) // Assuming you're using mongoose and creatorId is a string
+                creator: new mongoose.Types.ObjectId(creatorId)
+            }
+        });
+    }
+
+    // If pollId is provided, add a $match stage to filter polls by pollId
+    if (pollId) {
+        pipeline.unshift({
+            $match: {
+                _id: new mongoose.Types.ObjectId(pollId)
             }
         });
     }
@@ -163,16 +179,23 @@ export const createNewPoll = async (req: Request, res: Response) => {
 };
 
 export const deletePoll = async (req: Request, res: Response) => {
-    const pollId = req.params.id;
-    // Find the poll by its ID and delete it
-    const deletedPoll = await PollModal.findByIdAndDelete(pollId);
+    const userId = (req.user as User).userId;
 
-    if (!deletedPoll) {
-        // If no poll with the given ID was found, return a 404 error
+    const pollId = req.params.id;
+
+    const poll = await PollModal.findById(pollId);
+
+    if (!poll) {
         return res.status(404).json({ message: "Poll not found" });
     }
 
-    // If the poll was successfully deleted, return a success response
+    if (poll.creator.toString() !== userId) {
+        // If the logged-in user is not the creator, return a 403 forbidden error
+        return res.status(403).json({ message: "You are not authorized to delete this poll" });
+    }
+
+    await PollModal.findByIdAndDelete(pollId);
+
     return res.status(200).json({ message: "Poll deleted successfully" });
 };
 
@@ -205,5 +228,12 @@ export const votePoll = async (req: Request, res: Response) => {
     // Save the updated poll to the database
     await poll.save();
 
-    return res.status(200).json({ message: "Vote recorded successfully" });
+    // Fetch the updated poll from the database
+    const updatedPoll = await getPolls(null, pollId);
+
+    if (!updatedPoll) {
+        return res.status(404).json({ message: "Updated poll not found" });
+    }
+
+    return res.status(200).json({ message: "Vote recorded successfully", poll: updatedPoll[0] });
 };
